@@ -1,87 +1,186 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useAudioPlayer } from 'expo-audio';
 import * as Location from 'expo-location';
-import { Accelerometer } from 'expo-sensors';
 import * as SMS from 'expo-sms';
-import { useEffect, useRef } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import {
+  Alert,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+
+import EmergencyTools from '../components/EmergencyTools';
+import FakeCallOverlay from '../components/FakeCallOverlay';
 import SOSButton from '../components/SOSButton';
 
-export default function HomeScreen({ onLogout }: { onLogout?: () => void }) {
+import {
+  getLastKnownLocation,
+  saveLastKnownLocation,
+} from '../services/BatteryService';
+
+export default function HomeScreen({
+  onLogout,
+}: {
+  onLogout?: () => void;
+}) {
+  const [fakeCallVisible, setFakeCallVisible] = useState(false);
+  const [sirenPlaying, setSirenPlaying] = useState(false);
+
+  const sirenPlayer = useAudioPlayer(
+    require('../../assets/sounds/emergency-siren.mp3')
+  );
+
   const handleSOS = async () => {
     try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission Denied', 'Location permission is required for SOS.');
-        return;
-      }
-
-      const location = await Location.getCurrentPositionAsync({});
-      const { latitude, longitude } = location.coords;
-      const mapsLink = `https://maps.google.com/?q=${latitude},${longitude}`;
-
       const saved = await AsyncStorage.getItem('trustedContacts');
+
       const contacts = saved ? JSON.parse(saved) : [];
 
       if (contacts.length === 0) {
         Alert.alert(
-          'No Contacts',
-          'Please add trusted contacts first before using SOS!',
-          [{ text: 'OK' }]
+          'No Trusted Contacts',
+          'Please add trusted contacts before using SOS.'
         );
         return;
       }
 
-      const phoneNumbers = contacts.map((c: any) => c.phone);
-      const isAvailable = await SMS.isAvailableAsync();
-      if (isAvailable) {
-        await SMS.sendSMSAsync(
-          phoneNumbers,
-          `🚨 EMERGENCY ALERT! I need help!\nMy location: ${mapsLink}`
+      let locationMessage = '';
+
+      try {
+        const { status } =
+          await Location.requestForegroundPermissionsAsync();
+
+        if (status === 'granted') {
+          const location =
+            await Location.getCurrentPositionAsync({
+              accuracy: Location.Accuracy.High,
+            });
+
+          const {
+            latitude,
+            longitude,
+          } = location.coords;
+
+          const mapsLink =
+            `https://maps.google.com/?q=${latitude},${longitude}`;
+
+          locationMessage =
+            `Current location:\n${mapsLink}`;
+
+          await saveLastKnownLocation();
+        }
+      } catch (locationError) {
+        console.log(
+          'Current location unavailable. Using last known location.'
         );
-      } else {
-        Alert.alert('SMS not available on this device');
       }
+
+      if (!locationMessage) {
+        const lastLocation =
+          await getLastKnownLocation();
+
+        if (lastLocation) {
+          const mapsLink =
+            `https://maps.google.com/?q=${lastLocation.latitude},${lastLocation.longitude}`;
+
+          locationMessage =
+            `Last known location:\n${mapsLink}\n\n` +
+            `Location recorded:\n${new Date(
+              lastLocation.timestamp
+            ).toLocaleString()}`;
+        }
+      }
+
+      if (!locationMessage) {
+        locationMessage =
+          `Location currently unavailable.\n` +
+          `Please contact me immediately.`;
+      }
+
+      const phoneNumbers =
+        contacts.map((c: any) => c.phone);
+
+      const isAvailable =
+        await SMS.isAvailableAsync();
+
+      if (!isAvailable) {
+        Alert.alert(
+          'SMS Not Available',
+          'SMS service is not available on this device.'
+        );
+        return;
+      }
+
+      const message =
+        `EMERGENCY ALERT!\n\n` +
+        `I may need immediate help.\n\n` +
+        `${locationMessage}`;
+
+      await SMS.sendSMSAsync(
+        phoneNumbers,
+        message
+      );
+
+      Alert.alert(
+        'SOS Sent',
+        'Emergency alert has been sent to your trusted contacts.'
+      );
+
     } catch (error) {
-      Alert.alert('Error', 'Could not send SOS. Please try again.');
+      console.log('SOS Error:', error);
+
+      Alert.alert(
+        'SOS Error',
+        'Could not send the emergency alert. Please try again.'
+      );
     }
   };
 
-  const lastShake = useRef(0);
-
-  useEffect(() => {
-    Accelerometer.setUpdateInterval(300);
-    const subscription = Accelerometer.addListener(({ x, y, z }) => {
-      const acceleration = Math.sqrt(x * x + y * y + z * z);
-      const now = Date.now();
-      if (acceleration > 2.5 && now - lastShake.current > 3000) {
-        lastShake.current = now;
-        handleSOS();
-      }
-    });
-    return () => subscription.remove();
-  }, []);
+  const handleSiren = () => {
+    if (sirenPlaying) {
+      sirenPlayer.pause();
+      sirenPlayer.seekTo(0);
+      setSirenPlaying(false);
+    } else {
+      sirenPlayer.seekTo(0);
+      sirenPlayer.play();
+      setSirenPlaying(true);
+    }
+  };
 
   return (
     <View style={styles.container}>
-      <Text style={styles.header}>Women Safety App</Text>
 
-      <Pressable style={styles.logoutButton} onPress={onLogout}>
-        <Text style={styles.logoutText}>Logout</Text>
-      </Pressable>
+      <TouchableOpacity
+        style={styles.logoutButton}
+        onPress={onLogout}
+      >
+        <Text style={styles.logoutText}>
+          Logout
+        </Text>
+      </TouchableOpacity>
 
-      <Text style={styles.subheader}>You are protected 🛡️</Text>
+      <Text style={styles.header}>
+        Safe Her
+      </Text>
 
       <View style={styles.sosContainer}>
         <SOSButton onPress={handleSOS} />
       </View>
 
-      <View style={styles.shakeBadge}>
-        <Text style={styles.shakeText}>📳 Shake your phone to trigger SOS!</Text>
-      </View>
+      <EmergencyTools
+        onFakeCall={() => setFakeCallVisible(true)}
+        onSiren={handleSiren}
+        sirenPlaying={sirenPlaying}
+      />
 
-      <Text style={styles.hint}>
-        Press SOS to instantly alert your trusted contacts with your location
-      </Text>
+      <FakeCallOverlay
+        visible={fakeCallVisible}
+        onClose={() => setFakeCallVisible(false)}
+      />
+
     </View>
   );
 }
@@ -91,59 +190,39 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#fff0f3',
     alignItems: 'center',
-    paddingTop: 80,
+    paddingTop: 110,
     paddingHorizontal: 20,
   },
+
   header: {
-    fontSize: 26,
+    fontSize: 42,
     fontWeight: 'bold',
-    color: '#c0392b',
+    color: '#b52b2b',
+    letterSpacing: 1,
+    marginTop: 80,
   },
-  subheader: {
-    fontSize: 15,
-    color: '#888',
-    marginTop: 6,
-    marginBottom: 60,
-  },
+
   sosContainer: {
-    marginVertical: 40,
-  },
-  hint: {
-    fontSize: 13,
-    color: '#aaa',
-    textAlign: 'center',
-    marginTop: 40,
-    paddingHorizontal: 30,
-  },
-  shakeBadge: {
-    backgroundColor: '#fff5f5',
-    borderRadius: 12,
-    padding: 12,
-    borderLeftWidth: 4,
-    borderLeftColor: '#e74c3c',
     width: '100%',
-    marginTop: 20,
+    alignItems: 'center',
+    marginTop: 95,
   },
-  shakeText: {
-    fontSize: 13,
-    color: '#c0392b',
-    fontWeight: '600',
-    textAlign: 'center',
-  },
+
   logoutButton: {
     position: 'absolute',
     top: 60,
     right: 20,
     backgroundColor: '#fff0f3',
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: '#e74c3c',
-    borderRadius: 20,
-    paddingVertical: 6,
-    paddingHorizontal: 14,
+    borderRadius: 25,
+    paddingVertical: 8,
+    paddingHorizontal: 20,
   },
+
   logoutText: {
-    color: '#e74c3c',
-    fontSize: 12,
+    color: '#c0392b',
+    fontSize: 14,
     fontWeight: '600',
   },
 });

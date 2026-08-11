@@ -4,120 +4,378 @@ import * as Location from 'expo-location';
 import * as SMS from 'expo-sms';
 import { useEffect, useState } from 'react';
 import {
-    Alert,
-    StyleSheet,
-    Switch,
-    Text,
-    TouchableOpacity,
-    View
+  Alert,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
+
+import {
+  getSafetyMode,
+  setSafetyMode,
+} from '../services/SafetyModeService';
 
 export default function BatteryScreen() {
   const [batteryLevel, setBatteryLevel] = useState(0);
   const [isCharging, setIsCharging] = useState(false);
+
+  const [safetyMode, setSafetyModeState] = useState(false);
   const [autoAlertEnabled, setAutoAlertEnabled] = useState(true);
-  const [alertThreshold, setAlertThreshold] = useState(20);
-  const [alertSent, setAlertSent] = useState(false);
+
+  // Fixed warning level
+  const alertThreshold = 20;
+
+  const [warningShown, setWarningShown] = useState(false);
+  const [criticalAlertShown, setCriticalAlertShown] = useState(false);
 
   useEffect(() => {
-    loadBatteryInfo();
-    const interval = setInterval(loadBatteryInfo, 10000); // check every 10 seconds
+    loadInitialData();
+
+    const interval = setInterval(() => {
+      loadBatteryInfo();
+    }, 10000);
+
     return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
     checkAndAlert();
-  }, [batteryLevel, autoAlertEnabled]);
+  }, [
+    batteryLevel,
+    autoAlertEnabled,
+    safetyMode,
+    isCharging,
+  ]);
+
+  const loadInitialData = async () => {
+    await loadBatteryInfo();
+    await loadSafetyMode();
+  };
 
   const loadBatteryInfo = async () => {
     try {
       const level = await Battery.getBatteryLevelAsync();
       const state = await Battery.getBatteryStateAsync();
+
       setBatteryLevel(Math.round(level * 100));
-      setIsCharging(state === Battery.BatteryState.CHARGING);
-    } catch (e) {
-      console.log('Battery error:', e);
+      setIsCharging(
+        state === Battery.BatteryState.CHARGING
+      );
+    } catch (error) {
+      console.log('Battery error:', error);
     }
   };
 
-  const checkAndAlert = async () => {
-    if (
-      autoAlertEnabled &&
-      batteryLevel > 0 &&
-      batteryLevel <= alertThreshold &&
-      !isCharging &&
-      !alertSent
-    ) {
-      setAlertSent(true);
-      await sendLowBatteryAlert();
+  const loadSafetyMode = async () => {
+    const enabled = await getSafetyMode();
+    setSafetyModeState(enabled);
+  };
+
+  const toggleSafetyMode = async (enabled: boolean) => {
+    setSafetyModeState(enabled);
+
+    await setSafetyMode(enabled);
+
+    setWarningShown(false);
+    setCriticalAlertShown(false);
+
+    if (enabled) {
+      Alert.alert(
+        '🛡️ Safety Mode Activated',
+        'Battery emergency monitoring is now active.'
+      );
+    } else {
+      Alert.alert(
+        'Safety Mode Disabled',
+        'Battery-based emergency monitoring has been turned off.'
+      );
     }
-    // Reset alert sent flag when battery goes above threshold
+  };
+
+  const toggleEmergencyMonitoring = (
+    enabled: boolean
+  ) => {
+    setAutoAlertEnabled(enabled);
+
+    setWarningShown(false);
+    setCriticalAlertShown(false);
+  };
+
+  const checkAndAlert = () => {
+    if (batteryLevel <= 0 || isCharging) {
+      return;
+    }
+
+    // Normal mode:
+    // Low battery never causes an emergency.
+    if (!safetyMode) {
+      if (batteryLevel > alertThreshold) {
+        setWarningShown(false);
+        setCriticalAlertShown(false);
+      }
+
+      return;
+    }
+
+    // Safety Mode + monitoring OFF
+    if (!autoAlertEnabled) {
+      return;
+    }
+
+    // Warning level: 20%
+    if (
+      batteryLevel <= alertThreshold &&
+      batteryLevel > 10 &&
+      !warningShown
+    ) {
+      setWarningShown(true);
+
+      Alert.alert(
+        '🔋 Battery Low',
+        `Your battery is at ${batteryLevel}%. Safety Mode is active. Please charge your phone if possible.`,
+        [
+          {
+            text: "I'm Safe",
+            style: 'default',
+          },
+        ]
+      );
+    }
+
+    // Critical level: 10%
+    if (
+      batteryLevel <= 10 &&
+      !criticalAlertShown
+    ) {
+      setCriticalAlertShown(true);
+
+      Alert.alert(
+        '⚠️ Critical Battery',
+        `Your battery is at ${batteryLevel}%. Your phone may switch off soon.`,
+        [
+          {
+            text: "I'm Safe",
+            style: 'cancel',
+          },
+          {
+            text: 'SEND ALERT',
+            style: 'destructive',
+            onPress: sendLowBatteryAlert,
+          },
+        ]
+      );
+    }
+
+    // Reset once battery goes above warning level
     if (batteryLevel > alertThreshold) {
-      setAlertSent(false);
+      setWarningShown(false);
+      setCriticalAlertShown(false);
     }
   };
 
   const sendLowBatteryAlert = async () => {
     try {
-      Alert.alert(
-        '🔋 Low Battery Alert!',
-        `Battery is at ${batteryLevel}%. Sending alert to your trusted contacts!`
+      let mapsLink = 'Location unavailable';
+
+      const { status } =
+        await Location.requestForegroundPermissionsAsync();
+
+      if (status === 'granted') {
+        try {
+          const location =
+            await Location.getCurrentPositionAsync({
+              accuracy: Location.Accuracy.Balanced,
+            });
+
+          const {
+            latitude,
+            longitude,
+          } = location.coords;
+
+          mapsLink =
+            `https://maps.google.com/?q=${latitude},${longitude}`;
+        } catch (locationError) {
+          console.log(
+            'Could not get current location'
+          );
+
+          const savedLocation =
+            await AsyncStorage.getItem(
+              'lastKnownLocation'
+            );
+
+          if (savedLocation) {
+            const lastLocation =
+              JSON.parse(savedLocation);
+
+            mapsLink =
+              `https://maps.google.com/?q=${lastLocation.latitude},${lastLocation.longitude}`;
+          }
+        }
+      }
+
+      const saved =
+        await AsyncStorage.getItem(
+          'trustedContacts'
+        );
+
+      const contacts = saved
+        ? JSON.parse(saved)
+        : [];
+
+      if (contacts.length === 0) {
+        Alert.alert(
+          'No Trusted Contacts',
+          'Please add trusted contacts before using emergency alerts.'
+        );
+
+        return;
+      }
+
+      const phoneNumbers = contacts.map(
+        (contact: any) => contact.phone
       );
 
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return;
+      const isAvailable =
+        await SMS.isAvailableAsync();
 
-      const location = await Location.getCurrentPositionAsync({});
-      const { latitude, longitude } = location.coords;
-      const mapsLink = `https://maps.google.com/?q=${latitude},${longitude}`;
-
-      const saved = await AsyncStorage.getItem('trustedContacts');
-      const contacts = saved ? JSON.parse(saved) : [];
-
-      if (contacts.length === 0) return;
-
-      const phoneNumbers = contacts.map((c: any) => c.phone);
-      const isAvailable = await SMS.isAvailableAsync();
-
-      if (isAvailable) {
-        await SMS.sendSMSAsync(
-          phoneNumbers,
-          `🔋 LOW BATTERY ALERT!\nMy phone battery is at ${batteryLevel}% and may switch off soon.\nMy last known location: ${mapsLink}\nPlease check on me!`
+      if (!isAvailable) {
+        Alert.alert(
+          'SMS Unavailable',
+          'SMS is not available on this device.'
         );
+
+        return;
       }
-    } catch (e) {
-      console.log('Error sending low battery alert:', e);
+
+      await SMS.sendSMSAsync(
+        phoneNumbers,
+        `🔋 CRITICAL BATTERY ALERT!
+
+Safety Mode was active and my phone battery is critically low at ${batteryLevel}%.
+
+My last known location:
+${mapsLink}
+
+Please check on me.`
+      );
+
+      Alert.alert(
+        '🚨 Alert Sent',
+        'Your trusted contacts have been notified.'
+      );
+    } catch (error) {
+      console.log(
+        'Low battery alert error:',
+        error
+      );
+
+      Alert.alert(
+        'Alert Failed',
+        'Could not send the emergency alert.'
+      );
     }
   };
 
+  const testBatteryAlert = async (level: number) => {
+  await AsyncStorage.setItem(
+    'testBatteryLevel',
+    level.toString()
+  );
+
+  setBatteryLevel(level);
+  setWarningShown(false);
+  setCriticalAlertShown(false);
+};
+
   const getBatteryColor = () => {
-    if (batteryLevel > 50) return '#27ae60';
-    if (batteryLevel > 20) return '#f39c12';
+    if (batteryLevel > 50) {
+      return '#27ae60';
+    }
+
+    if (batteryLevel > 20) {
+      return '#f39c12';
+    }
+
     return '#e74c3c';
   };
 
   const getBatteryEmoji = () => {
-    if (isCharging) return '⚡';
-    if (batteryLevel > 50) return '🔋';
-    if (batteryLevel > 20) return '🪫';
+    if (isCharging) {
+      return '⚡';
+    }
+
+    if (batteryLevel > 50) {
+      return '🔋';
+    }
+
+    if (batteryLevel > 20) {
+      return '🪫';
+    }
+
     return '🔴';
   };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.header}>Battery Monitor</Text>
-      <Text style={styles.subheader}>
-        Auto-alerts contacts when battery is critically low
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.contentContainer}
+      showsVerticalScrollIndicator={false}
+    >
+      {/* Header */}
+      <Text style={styles.header}>
+        Battery Safety
       </Text>
 
-      {/* Battery Display */}
+      {/* Safety Mode */}
+      <View style={styles.safetyCard}>
+        <View style={styles.safetyInfo}>
+          <Text style={styles.safetyTitle}>
+            🛡️ Safety Mode
+          </Text>
+
+          <Text style={styles.safetyDescription}>
+            Activate this before travelling alone.
+            Battery emergency monitoring will only
+            work while Safety Mode is active.
+          </Text>
+        </View>
+
+        <Switch
+          value={safetyMode}
+          onValueChange={toggleSafetyMode}
+          trackColor={{
+            false: '#ddd',
+            true: '#e74c3c',
+          }}
+          thumbColor="white"
+        />
+      </View>
+
+      {/* Battery Card */}
       <View style={styles.batteryCard}>
-        <Text style={styles.batteryEmoji}>{getBatteryEmoji()}</Text>
-        <Text style={[styles.batteryPercent, { color: getBatteryColor() }]}>
+        <Text style={styles.batteryEmoji}>
+          {getBatteryEmoji()}
+        </Text>
+
+        <Text
+          style={[
+            styles.batteryPercent,
+            {
+              color: getBatteryColor(),
+            },
+          ]}
+        >
           {batteryLevel}%
         </Text>
+
         <Text style={styles.batteryStatus}>
-          {isCharging ? '⚡ Charging' : 'Not Charging'}
+          {isCharging
+            ? '⚡ Charging'
+            : 'Not Charging'}
         </Text>
 
         {/* Battery Bar */}
@@ -126,8 +384,9 @@ export default function BatteryScreen() {
             style={[
               styles.batteryBarFill,
               {
-                width: `${batteryLevel}%` as any,
-                backgroundColor: getBatteryColor(),
+                width: `${batteryLevel}%`,
+                backgroundColor:
+                  getBatteryColor(),
               },
             ]}
           />
@@ -137,72 +396,84 @@ export default function BatteryScreen() {
           style={styles.refreshButton}
           onPress={loadBatteryInfo}
         >
-          <Text style={styles.refreshText}>🔄 Refresh</Text>
+          <Text style={styles.refreshText}>
+            🔄 Refresh
+          </Text>
         </TouchableOpacity>
       </View>
 
-      {/* Auto Alert Toggle */}
-      <View style={styles.settingCard}>
-        <View style={styles.settingRow}>
-          <View style={styles.settingInfo}>
-            <Text style={styles.settingTitle}>Auto Alert</Text>
-            <Text style={styles.settingDesc}>
-              Send SOS when battery drops below {alertThreshold}%
-            </Text>
-          </View>
-          <Switch
-            value={autoAlertEnabled}
-            onValueChange={setAutoAlertEnabled}
-            trackColor={{ false: '#ddd', true: '#e74c3c' }}
-            thumbColor={autoAlertEnabled ? 'white' : '#aaa'}
-          />
+      {/* Emergency Monitoring */}
+      <View style={styles.monitoringCard}>
+        <View style={styles.monitoringInfo}>
+          <Text style={styles.monitoringTitle}>
+            🚨 Battery Emergency Monitoring
+          </Text>
+
+          <Text style={styles.monitoringDescription}>
+            Only active when Safety Mode is ON
+          </Text>
         </View>
+
+        <Switch
+          value={autoAlertEnabled}
+          onValueChange={
+            toggleEmergencyMonitoring
+          }
+          trackColor={{
+            false: '#ddd',
+            true: '#e74c3c',
+          }}
+          thumbColor="white"
+        />
       </View>
 
-      {/* Threshold Options */}
-      <View style={styles.settingCard}>
-        <Text style={styles.settingTitle}>Alert Threshold</Text>
-        <Text style={styles.settingDesc}>Send alert when battery is below:</Text>
-        <View style={styles.thresholdRow}>
-          {[10, 15, 20, 25, 30].map(val => (
-            <TouchableOpacity
-              key={val}
-              style={[
-                styles.thresholdButton,
-                alertThreshold === val && styles.thresholdButtonActive,
-              ]}
-              onPress={() => {
-                setAlertThreshold(val);
-                setAlertSent(false);
-              }}
-            >
-              <Text style={[
-                styles.thresholdText,
-                alertThreshold === val && styles.thresholdTextActive,
-              ]}>
-                {val}%
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      </View>
-
-      {/* Test Button */}
-      <TouchableOpacity
-        style={styles.testButton}
-        onPress={sendLowBatteryAlert}
-      >
-        <Text style={styles.testButtonText}>🧪 Test Low Battery Alert</Text>
-      </TouchableOpacity>
-
-      {/* Info */}
-      <View style={styles.infoBox}>
-        <Text style={styles.infoText}>
-          💡 This feature ensures your contacts are notified even if your phone
-          is about to die and you cannot manually send an SOS.
+      {/* Developer Test */}
+      <View style={styles.testContainer}>
+        <Text style={styles.testTitle}>
+          🧪 Developer Test
         </Text>
+
+        <Text style={styles.testDescription}>
+          Simulate battery levels without draining
+          your phone.
+        </Text>
+
+        <View style={styles.testRow}>
+          <TouchableOpacity
+            style={styles.testLevelButton}
+            onPress={() =>
+              testBatteryAlert(50)
+            }
+          >
+            <Text style={styles.testLevelText}>
+              50%
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.testLevelButton}
+            onPress={() =>
+              testBatteryAlert(20)
+            }
+          >
+            <Text style={styles.testLevelText}>
+              20%
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.testCriticalButton}
+            onPress={() =>
+              testBatteryAlert(10)
+            }
+          >
+            <Text style={styles.testCriticalText}>
+              10%
+            </Text>
+          </TouchableOpacity>
+        </View>
       </View>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -210,151 +481,205 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#fff0f3',
+  },
+
+  contentContainer: {
     paddingTop: 60,
     paddingHorizontal: 20,
+    paddingBottom: 30,
   },
+
   header: {
     fontSize: 26,
     fontWeight: 'bold',
     color: '#c0392b',
+    marginBottom: 16,
   },
-  subheader: {
-    fontSize: 13,
+
+  /* Safety Mode */
+
+  safetyCard: {
+    backgroundColor: '#fff7f8',
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#f3cccc',
+  },
+
+  safetyInfo: {
+    flex: 1,
+    marginRight: 10,
+  },
+
+  safetyTitle: {
+    fontSize: 17,
+    fontWeight: 'bold',
+    color: '#c0392b',
+  },
+
+  safetyDescription: {
+    fontSize: 12,
     color: '#888',
-    marginTop: 4,
-    marginBottom: 20,
+    lineHeight: 18,
+    marginTop: 5,
   },
+
+  /* Battery */
+
   batteryCard: {
     backgroundColor: 'white',
-    borderRadius: 16,
-    padding: 20,
+    borderRadius: 18,
+    paddingVertical: 18,
+    paddingHorizontal: 18,
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 14,
     elevation: 3,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
     shadowOpacity: 0.1,
     shadowRadius: 4,
   },
+
   batteryEmoji: {
-    fontSize: 48,
-    marginBottom: 8,
+    fontSize: 38,
+    marginBottom: 3,
   },
+
   batteryPercent: {
-    fontSize: 52,
+    fontSize: 44,
     fontWeight: 'bold',
   },
+
   batteryStatus: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#888',
-    marginTop: 4,
-    marginBottom: 16,
+    marginTop: 2,
+    marginBottom: 12,
   },
+
   batteryBarContainer: {
     width: '100%',
-    height: 14,
+    height: 11,
     backgroundColor: '#eee',
-    borderRadius: 7,
+    borderRadius: 6,
     overflow: 'hidden',
-    marginBottom: 14,
+    marginBottom: 12,
   },
+
   batteryBarFill: {
     height: '100%',
-    borderRadius: 7,
+    borderRadius: 6,
   },
+
   refreshButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 20,
-    backgroundColor: '#fff0f3',
-    borderRadius: 20,
-    borderWidth: 1,
+    paddingVertical: 7,
+    paddingHorizontal: 22,
+    backgroundColor: '#fff5f5',
+    borderRadius: 22,
+    borderWidth: 1.5,
     borderColor: '#e74c3c',
   },
+
   refreshText: {
     color: '#e74c3c',
     fontSize: 13,
     fontWeight: '600',
   },
-  settingCard: {
-    backgroundColor: 'white',
-    borderRadius: 16,
+
+  /* Emergency Monitoring */
+
+  monitoringCard: {
+    backgroundColor: '#fff7f8',
+    borderRadius: 18,
     padding: 16,
-    marginBottom: 12,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 3,
-  },
-  settingRow: {
+    marginBottom: 14,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#f3cccc',
   },
-  settingInfo: {
+
+  monitoringInfo: {
     flex: 1,
     marginRight: 10,
   },
-  settingTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#333',
-  },
-  settingDesc: {
-    fontSize: 12,
-    color: '#888',
-    marginTop: 2,
-    marginBottom: 10,
-  },
-  thresholdRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 4,
-  },
-  thresholdButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 20,
-    backgroundColor: '#f5f5f5',
-    borderWidth: 1,
-    borderColor: '#eee',
-  },
-  thresholdButtonActive: {
-    backgroundColor: '#e74c3c',
-    borderColor: '#e74c3c',
-  },
-  thresholdText: {
-    fontSize: 13,
-    color: '#888',
-    fontWeight: '600',
-  },
-  thresholdTextActive: {
-    color: 'white',
-  },
-  testButton: {
-    backgroundColor: '#fff0f3',
-    borderWidth: 2,
-    borderColor: '#e74c3c',
-    borderRadius: 30,
-    paddingVertical: 14,
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  testButtonText: {
-    color: '#e74c3c',
+
+  monitoringTitle: {
     fontSize: 15,
     fontWeight: 'bold',
+    color: '#333',
   },
-  infoBox: {
-    backgroundColor: '#fff5f5',
-    borderRadius: 12,
-    padding: 14,
-    borderLeftWidth: 4,
-    borderLeftColor: '#e74c3c',
-  },
-  infoText: {
+
+  monitoringDescription: {
     fontSize: 12,
     color: '#888',
-    lineHeight: 18,
+    marginTop: 4,
+  },
+
+  /* Developer Test */
+
+  testContainer: {
+    backgroundColor: 'white',
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 10,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 1,
+    },
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+  },
+
+  testTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+
+  testDescription: {
+    fontSize: 12,
+    color: '#888',
+    marginTop: 4,
+    marginBottom: 14,
+  },
+
+  testRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+
+  testLevelButton: {
+    backgroundColor: '#f2f2f2',
+    borderRadius: 22,
+    paddingVertical: 10,
+    paddingHorizontal: 28,
+  },
+
+  testLevelText: {
+    color: '#555',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+
+  testCriticalButton: {
+    backgroundColor: '#e74c3c',
+    borderRadius: 22,
+    paddingVertical: 10,
+    paddingHorizontal: 28,
+  },
+
+  testCriticalText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: 'bold',
   },
 });

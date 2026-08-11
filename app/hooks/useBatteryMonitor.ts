@@ -1,14 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState } from 'react';
 
 import {
   getBatteryStatus,
   saveLastKnownLocation,
-} from "../services/BatteryService";
+} from '../services/BatteryService';
 
 export default function useBatteryMonitor() {
-  const [batteryLevel, setBatteryLevel] = useState(100);
-  const [isCharging, setIsCharging] = useState(false);
-  const [survivalMode, setSurvivalMode] = useState(false);
+  const [batteryLevel, setBatteryLevel] =
+    useState(100);
+
+  const [isCharging, setIsCharging] =
+    useState(false);
+
+  const [survivalMode, setSurvivalMode] =
+    useState(false);
 
   useEffect(() => {
     checkBattery();
@@ -22,17 +27,31 @@ export default function useBatteryMonitor() {
 
   const checkBattery = async () => {
     try {
-      const status = await getBatteryStatus();
+      const status =
+        await getBatteryStatus();
 
-      setBatteryLevel(status.batteryLevel);
-      setIsCharging(status.isCharging);
-      setSurvivalMode(status.survivalMode);
+      setBatteryLevel(
+        status.batteryLevel
+      );
 
+      setIsCharging(
+        status.isCharging
+      );
+
+      setSurvivalMode(
+        status.survivalMode
+      );
+
+      // Automatically save location
+      // while Survival Mode is active.
       if (status.survivalMode) {
         await saveLastKnownLocation();
       }
     } catch (error) {
-      console.log("Battery Monitor Error:", error);
+      console.log(
+        'Battery Monitor Error:',
+        error
+      );
     }
   };
 

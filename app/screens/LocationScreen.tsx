@@ -1,18 +1,22 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import { useEffect, useRef, useState } from 'react';
 import {
-    Alert, ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View
+  Alert, ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View
 } from 'react-native';
 import MapView, { Circle, Marker } from 'react-native-maps';
+import useBatteryMonitor from '../hooks/useBatteryMonitor';
 
 export default function LocationScreen() {
   const [location, setLocation] = useState<any>(null);
   const [address, setAddress] = useState<any>(null);
   const [isTracking, setIsTracking] = useState(false);
+  const [survivalMode, setSurvivalMode] =
+  useState(false);
   const [lastUpdated, setLastUpdated] = useState('');
   const mapRef = useRef<any>(null);
   const intervalRef = useRef<any>(null);
@@ -23,12 +27,27 @@ export default function LocationScreen() {
 
   useEffect(() => {
     if (isTracking) {
-      intervalRef.current = setInterval(getLocation, 5000);
-    } else {
+  const updateInterval = survivalMode
+    ? 30000
+    : 5000;
+
+  intervalRef.current =
+    setInterval(
+      getLocation,
+      updateInterval
+    );
+} else {
       clearInterval(intervalRef.current);
     }
     return () => clearInterval(intervalRef.current);
-  }, [isTracking]);
+}, [isTracking, survivalMode]);  const {
+  survivalMode: batterySurvivalMode,
+} =
+  useBatteryMonitor();
+
+  useEffect(() => {
+  setSurvivalMode(batterySurvivalMode);
+}, [batterySurvivalMode]);
 
   const getLocation = async () => {
     try {
@@ -38,10 +57,24 @@ export default function LocationScreen() {
         return;
       }
 
-      const loc = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
-      });
+      const loc =
+  await Location.getCurrentPositionAsync({
+    accuracy: survivalMode
+      ? Location.Accuracy.Balanced
+      : Location.Accuracy.High,
+  });
       setLocation(loc.coords);
+      if (survivalMode) {
+  await AsyncStorage.setItem(
+    'lastKnownLocation',
+    JSON.stringify({
+      latitude: loc.coords.latitude,
+      longitude: loc.coords.longitude,
+      accuracy: loc.coords.accuracy,
+      timestamp: new Date().toISOString(),
+    })
+  );
+}
 
       // Get address from coordinates
       const addressResult = await Location.reverseGeocodeAsync({
@@ -72,7 +105,6 @@ export default function LocationScreen() {
       Alert.alert('Error', 'Could not get location.');
     }
   };
-
   const formatAddress = () => {
     if (!address) return 'Fetching address...';
     const parts = [
@@ -86,12 +118,31 @@ export default function LocationScreen() {
   };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.header}>Live Location</Text>
-      <Text style={styles.subheader}>Your real-time location tracking</Text>
+  <View style={styles.container}>
 
-      {/* Map */}
-      <View style={styles.mapContainer}>
+    <Text style={styles.header}>
+      Live Location
+    </Text>
+
+    <Text style={styles.subheader}>
+      Your real-time location tracking
+    </Text>
+
+    {survivalMode && (
+      <View style={styles.survivalBanner}>
+        <Text style={styles.survivalTitle}>
+          🟠 Battery Survival Mode
+        </Text>
+
+        <Text style={styles.survivalText}>
+          Battery is critically low. Location
+          updates have been reduced to save power.
+        </Text>
+      </View>
+    )}
+
+    {/* Map */}
+    <View style={styles.mapContainer}>
         {location ? (
           <MapView
             ref={mapRef}
@@ -185,14 +236,15 @@ export default function LocationScreen() {
           </Text>
         </TouchableOpacity>
 
-        {isTracking && (
-          <View style={styles.trackingBadge}>
-            <Text style={styles.trackingBadgeText}>
-              🟢 Live tracking active — updating every 5 seconds
-            </Text>
-          </View>
-        )}
-
+        
+          {isTracking && (
+  <View style={styles.trackingBadge}>
+    <Text style={styles.trackingBadgeText}>
+      🟢 Live tracking active — updating every{' '}
+      {survivalMode ? '30 seconds' : '5 seconds'}
+    </Text>
+  </View>
+)}
         <View style={styles.infoBox}>
           <Text style={styles.infoBoxText}>
             💡 Use live tracking when travelling alone. Your location updates
@@ -275,6 +327,28 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     lineHeight: 22,
   },
+  survivalBanner: {
+  backgroundColor: '#fff7e6',
+  borderRadius: 12,
+  padding: 12,
+  marginHorizontal: 20,
+  marginBottom: 12,
+  borderLeftWidth: 4,
+  borderLeftColor: '#f39c12',
+},
+
+survivalTitle: {
+  fontSize: 14,
+  fontWeight: 'bold',
+  color: '#d68910',
+},
+
+survivalText: {
+  fontSize: 11,
+  color: '#888',
+  marginTop: 4,
+  lineHeight: 17,
+},
   updatedText: {
     fontSize: 11,
     color: '#bbb',

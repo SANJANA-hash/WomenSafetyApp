@@ -1,23 +1,45 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Location from 'expo-location';
-import { useEffect, useRef, useState } from 'react';
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Location from "expo-location";
+import { useEffect, useRef, useState } from "react";
 import {
-  Alert, ScrollView,
+  Alert,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
-  View
-} from 'react-native';
-import MapView, { Circle, Marker } from 'react-native-maps';
-import useBatteryMonitor from '../hooks/useBatteryMonitor';
-
+  View,
+} from "react-native";
+import MapView, { Circle, Marker } from "react-native-maps";
+import {
+  detectPanicPattern,
+  PanicPrediction,
+} from "../../services/PanicPatternService";
+import useBatteryMonitor from "../hooks/useBatteryMonitor";
 export default function LocationScreen() {
   const [location, setLocation] = useState<any>(null);
   const [address, setAddress] = useState<any>(null);
   const [isTracking, setIsTracking] = useState(false);
-  const [survivalMode, setSurvivalMode] =
-  useState(false);
-  const [lastUpdated, setLastUpdated] = useState('');
+  const [survivalMode, setSurvivalMode] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState("");
+  const [panicPrediction, setPanicPrediction] =
+    useState<PanicPrediction | null>(null);
+  const [sosTapCount, setSosTapCount] = useState(0);
+  const [appSwitchCount, setAppSwitchCount] = useState(0);
+  const [lockUnlockCount, setLockUnlockCount] = useState(0);
+  const updatePanicPrediction = (
+    newSosCount = sosTapCount,
+    newAppSwitchCount = appSwitchCount,
+    newLockCount = lockUnlockCount,
+  ) => {
+    const prediction = detectPanicPattern({
+      lockUnlockCount: newLockCount,
+      sosTapCount: newSosCount,
+      appSwitchCount: newAppSwitchCount,
+      timeWindowSeconds: 60,
+    });
+
+    setPanicPrediction(prediction);
+  };
   const mapRef = useRef<any>(null);
   const intervalRef = useRef<any>(null);
 
@@ -27,54 +49,45 @@ export default function LocationScreen() {
 
   useEffect(() => {
     if (isTracking) {
-  const updateInterval = survivalMode
-    ? 30000
-    : 5000;
+      const updateInterval = survivalMode ? 30000 : 5000;
 
-  intervalRef.current =
-    setInterval(
-      getLocation,
-      updateInterval
-    );
-} else {
+      intervalRef.current = setInterval(getLocation, updateInterval);
+    } else {
       clearInterval(intervalRef.current);
     }
     return () => clearInterval(intervalRef.current);
-}, [isTracking, survivalMode]);  const {
-  survivalMode: batterySurvivalMode,
-} =
-  useBatteryMonitor();
+  }, [isTracking, survivalMode]);
+  const { survivalMode: batterySurvivalMode } = useBatteryMonitor();
 
   useEffect(() => {
-  setSurvivalMode(batterySurvivalMode);
-}, [batterySurvivalMode]);
+    setSurvivalMode(batterySurvivalMode);
+  }, [batterySurvivalMode]);
 
   const getLocation = async () => {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission Denied', 'Location permission is required.');
+      if (status !== "granted") {
+        Alert.alert("Permission Denied", "Location permission is required.");
         return;
       }
 
-      const loc =
-  await Location.getCurrentPositionAsync({
-    accuracy: survivalMode
-      ? Location.Accuracy.Balanced
-      : Location.Accuracy.High,
-  });
+      const loc = await Location.getCurrentPositionAsync({
+        accuracy: survivalMode
+          ? Location.Accuracy.Balanced
+          : Location.Accuracy.High,
+      });
       setLocation(loc.coords);
       if (survivalMode) {
-  await AsyncStorage.setItem(
-    'lastKnownLocation',
-    JSON.stringify({
-      latitude: loc.coords.latitude,
-      longitude: loc.coords.longitude,
-      accuracy: loc.coords.accuracy,
-      timestamp: new Date().toISOString(),
-    })
-  );
-}
+        await AsyncStorage.setItem(
+          "lastKnownLocation",
+          JSON.stringify({
+            latitude: loc.coords.latitude,
+            longitude: loc.coords.longitude,
+            accuracy: loc.coords.accuracy,
+            timestamp: new Date().toISOString(),
+          }),
+        );
+      }
 
       // Get address from coordinates
       const addressResult = await Location.reverseGeocodeAsync({
@@ -89,24 +102,27 @@ export default function LocationScreen() {
       // Update time
       const now = new Date();
       setLastUpdated(
-        `${now.getHours()}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`
+        `${now.getHours()}:${now.getMinutes().toString().padStart(2, "0")}:${now.getSeconds().toString().padStart(2, "0")}`,
       );
 
       // Move map to current location
       if (mapRef.current && loc.coords) {
-        mapRef.current.animateToRegion({
-          latitude: loc.coords.latitude,
-          longitude: loc.coords.longitude,
-          latitudeDelta: 0.005,
-          longitudeDelta: 0.005,
-        }, 1000);
+        mapRef.current.animateToRegion(
+          {
+            latitude: loc.coords.latitude,
+            longitude: loc.coords.longitude,
+            latitudeDelta: 0.005,
+            longitudeDelta: 0.005,
+          },
+          1000,
+        );
       }
     } catch (e) {
-      Alert.alert('Error', 'Could not get location.');
+      Alert.alert("Error", "Could not get location.");
     }
   };
   const formatAddress = () => {
-    if (!address) return 'Fetching address...';
+    if (!address) return "Fetching address...";
     const parts = [
       address.name,
       address.street,
@@ -114,35 +130,28 @@ export default function LocationScreen() {
       address.city,
       address.region,
     ].filter(Boolean);
-    return parts.join(', ');
+    return parts.join(", ");
   };
 
   return (
-  <View style={styles.container}>
+    <View style={styles.container}>
+      <Text style={styles.header}>Live Location</Text>
 
-    <Text style={styles.header}>
-      Live Location
-    </Text>
+      <Text style={styles.subheader}>Your real-time location tracking</Text>
 
-    <Text style={styles.subheader}>
-      Your real-time location tracking
-    </Text>
+      {survivalMode && (
+        <View style={styles.survivalBanner}>
+          <Text style={styles.survivalTitle}>🟠 Battery Survival Mode</Text>
 
-    {survivalMode && (
-      <View style={styles.survivalBanner}>
-        <Text style={styles.survivalTitle}>
-          🟠 Battery Survival Mode
-        </Text>
+          <Text style={styles.survivalText}>
+            Battery is critically low. Location updates have been reduced to
+            save power.
+          </Text>
+        </View>
+      )}
 
-        <Text style={styles.survivalText}>
-          Battery is critically low. Location
-          updates have been reduced to save power.
-        </Text>
-      </View>
-    )}
-
-    {/* Map */}
-    <View style={styles.mapContainer}>
+      {/* Map */}
+      <View style={styles.mapContainer}>
         {location ? (
           <MapView
             ref={mapRef}
@@ -180,7 +189,10 @@ export default function LocationScreen() {
         )}
       </View>
 
-      <ScrollView style={styles.infoScroll} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={styles.infoScroll}
+        showsVerticalScrollIndicator={false}
+      >
         {/* Address Card */}
         <View style={styles.infoCard}>
           <Text style={styles.infoTitle}>📍 Current Address</Text>
@@ -217,34 +229,57 @@ export default function LocationScreen() {
         )}
 
         {/* Buttons */}
-        <TouchableOpacity
-          style={styles.refreshButton}
-          onPress={getLocation}
-        >
+        <TouchableOpacity style={styles.refreshButton} onPress={getLocation}>
           <Text style={styles.refreshText}>🔄 Refresh Location</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[
-            styles.trackButton,
-            isTracking && styles.trackButtonActive
-          ]}
+          style={[styles.trackButton, isTracking && styles.trackButtonActive]}
           onPress={() => setIsTracking(!isTracking)}
         >
           <Text style={styles.trackButtonText}>
-            {isTracking ? '⏹ Stop Live Tracking' : '▶ Start Live Tracking'}
+            {isTracking ? "⏹ Stop Live Tracking" : "▶ Start Live Tracking"}
           </Text>
         </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.panicTestButton}
+          onPress={() => {
+            const newCount = sosTapCount + 1;
+            setSosTapCount(newCount);
+            updatePanicPrediction(newCount);
+          }}
+        >
+          <Text style={styles.trackButtonText}>🚨 Test Panic Detection</Text>
+        </TouchableOpacity>
+        {panicPrediction && (
+          <View style={styles.panicCard}>
+            <Text style={styles.panicTitle}>🚨 Panic Detection</Text>
 
-        
-          {isTracking && (
-  <View style={styles.trackingBadge}>
-    <Text style={styles.trackingBadgeText}>
-      🟢 Live tracking active — updating every{' '}
-      {survivalMode ? '30 seconds' : '5 seconds'}
-    </Text>
-  </View>
-)}
+            <Text style={styles.panicLevel}>
+              Level: {panicPrediction.level}
+            </Text>
+
+            <Text style={styles.panicScore}>
+              Panic Score: {panicPrediction.panicScore}/100
+            </Text>
+
+            <Text style={styles.panicRecommendation}>
+              {panicPrediction.recommendation}
+            </Text>
+
+            <Text style={styles.panicCount}>
+              SOS taps detected: {sosTapCount}
+            </Text>
+          </View>
+        )}
+        {isTracking && (
+          <View style={styles.trackingBadge}>
+            <Text style={styles.trackingBadgeText}>
+              🟢 Live tracking active — updating every{" "}
+              {survivalMode ? "30 seconds" : "5 seconds"}
+            </Text>
+          </View>
+        )}
         <View style={styles.infoBox}>
           <Text style={styles.infoBoxText}>
             💡 Use live tracking when travelling alone. Your location updates
@@ -259,18 +294,18 @@ export default function LocationScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff0f3',
+    backgroundColor: "#fff0f3",
     paddingTop: 60,
   },
   header: {
     fontSize: 26,
-    fontWeight: 'bold',
-    color: '#c0392b',
+    fontWeight: "bold",
+    color: "#c0392b",
     paddingHorizontal: 20,
   },
   subheader: {
     fontSize: 13,
-    color: '#888',
+    color: "#888",
     marginTop: 4,
     marginBottom: 14,
     paddingHorizontal: 20,
@@ -279,9 +314,9 @@ const styles = StyleSheet.create({
     height: 240,
     marginHorizontal: 20,
     borderRadius: 16,
-    overflow: 'hidden',
+    overflow: "hidden",
     elevation: 4,
-    shadowColor: '#000',
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.15,
     shadowRadius: 6,
@@ -292,152 +327,200 @@ const styles = StyleSheet.create({
   },
   mapPlaceholder: {
     flex: 1,
-    backgroundColor: '#eee',
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: "#eee",
+    alignItems: "center",
+    justifyContent: "center",
   },
   mapPlaceholderText: {
     fontSize: 16,
-    color: '#aaa',
+    color: "#aaa",
   },
   infoScroll: {
     flex: 1,
     paddingHorizontal: 20,
   },
   infoCard: {
-    backgroundColor: 'white',
+    backgroundColor: "white",
     borderRadius: 14,
     padding: 16,
     marginBottom: 12,
     elevation: 2,
-    shadowColor: '#000',
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.08,
     shadowRadius: 3,
   },
   infoTitle: {
     fontSize: 13,
-    color: '#888',
+    color: "#888",
     marginBottom: 6,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   infoValue: {
     fontSize: 15,
-    color: '#333',
-    fontWeight: '500',
+    color: "#333",
+    fontWeight: "500",
     lineHeight: 22,
   },
   survivalBanner: {
-  backgroundColor: '#fff7e6',
-  borderRadius: 12,
-  padding: 12,
-  marginHorizontal: 20,
-  marginBottom: 12,
-  borderLeftWidth: 4,
-  borderLeftColor: '#f39c12',
-},
+    backgroundColor: "#fff7e6",
+    borderRadius: 12,
+    padding: 12,
+    marginHorizontal: 20,
+    marginBottom: 12,
+    borderLeftWidth: 4,
+    borderLeftColor: "#f39c12",
+  },
 
-survivalTitle: {
-  fontSize: 14,
-  fontWeight: 'bold',
-  color: '#d68910',
-},
+  survivalTitle: {
+    fontSize: 14,
+    fontWeight: "bold",
+    color: "#d68910",
+  },
 
-survivalText: {
-  fontSize: 11,
-  color: '#888',
-  marginTop: 4,
-  lineHeight: 17,
-},
+  survivalText: {
+    fontSize: 11,
+    color: "#888",
+    marginTop: 4,
+    lineHeight: 17,
+  },
   updatedText: {
     fontSize: 11,
-    color: '#bbb',
+    color: "#bbb",
     marginTop: 6,
   },
   coordsCard: {
-    backgroundColor: 'white',
+    backgroundColor: "white",
     borderRadius: 14,
     padding: 16,
     marginBottom: 12,
-    flexDirection: 'row',
+    flexDirection: "row",
     elevation: 2,
-    shadowColor: '#000',
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.08,
     shadowRadius: 3,
   },
   coordItem: {
     flex: 1,
-    alignItems: 'center',
+    alignItems: "center",
   },
   coordLabel: {
     fontSize: 11,
-    color: '#aaa',
+    color: "#aaa",
     marginBottom: 4,
   },
   coordValue: {
     fontSize: 13,
-    color: '#333',
-    fontWeight: '600',
+    color: "#333",
+    fontWeight: "600",
   },
   divider: {
     width: 1,
-    backgroundColor: '#eee',
+    backgroundColor: "#eee",
     marginVertical: 4,
   },
   refreshButton: {
-    backgroundColor: 'white',
+    backgroundColor: "white",
     borderWidth: 2,
-    borderColor: '#e74c3c',
+    borderColor: "#e74c3c",
     borderRadius: 30,
     paddingVertical: 13,
-    alignItems: 'center',
+    alignItems: "center",
     marginBottom: 10,
   },
   refreshText: {
-    color: '#e74c3c',
+    color: "#e74c3c",
     fontSize: 15,
-    fontWeight: 'bold',
+    fontWeight: "bold",
   },
   trackButton: {
-    backgroundColor: '#e74c3c',
+    backgroundColor: "#e74c3c",
     borderRadius: 30,
     paddingVertical: 14,
-    alignItems: 'center',
+    alignItems: "center",
     marginBottom: 10,
   },
+  panicTestButton: {
+    backgroundColor: "#8e44ad",
+    borderRadius: 30,
+    paddingVertical: 14,
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  panicCard: {
+    backgroundColor: "white",
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 12,
+    borderLeftWidth: 4,
+    borderLeftColor: "#8e44ad",
+    elevation: 2,
+  },
+
+  panicTitle: {
+    fontSize: 16,
+    fontWeight: "bold",
+    color: "#8e44ad",
+    marginBottom: 8,
+  },
+
+  panicLevel: {
+    fontSize: 14,
+    fontWeight: "bold",
+    color: "#333",
+    marginBottom: 5,
+  },
+
+  panicScore: {
+    fontSize: 13,
+    color: "#555",
+    marginBottom: 8,
+  },
+
+  panicRecommendation: {
+    fontSize: 12,
+    color: "#666",
+    lineHeight: 18,
+    marginBottom: 8,
+  },
+
+  panicCount: {
+    fontSize: 12,
+    color: "#999",
+  },
   trackButtonActive: {
-    backgroundColor: '#c0392b',
+    backgroundColor: "#c0392b",
   },
   trackButtonText: {
-    color: 'white',
+    color: "white",
     fontSize: 15,
-    fontWeight: 'bold',
+    fontWeight: "bold",
   },
   trackingBadge: {
-    backgroundColor: '#eafaf1',
+    backgroundColor: "#eafaf1",
     borderRadius: 10,
     padding: 10,
     marginBottom: 10,
     borderLeftWidth: 4,
-    borderLeftColor: '#27ae60',
+    borderLeftColor: "#27ae60",
   },
   trackingBadgeText: {
     fontSize: 12,
-    color: '#27ae60',
-    fontWeight: '600',
+    color: "#27ae60",
+    fontWeight: "600",
   },
   infoBox: {
-    backgroundColor: '#fff5f5',
+    backgroundColor: "#fff5f5",
     borderRadius: 12,
     padding: 14,
     borderLeftWidth: 4,
-    borderLeftColor: '#e74c3c',
+    borderLeftColor: "#e74c3c",
     marginBottom: 30,
   },
   infoBoxText: {
     fontSize: 12,
-    color: '#888',
+    color: "#888",
     lineHeight: 18,
   },
 });
